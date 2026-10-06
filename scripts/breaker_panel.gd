@@ -41,11 +41,14 @@ func _ready() -> void:
 		var pivot := Node3D.new()
 		pivot.position = Vector3(x, 0.0, 0.15)
 		add_child(pivot)
-		var black := StandardMaterial3D.new()
-		black.albedo_color = Color(0.05, 0.05, 0.05)
-		black.roughness = 0.4
-		_box(Vector3(0.05, 0.11, 0.02), Vector3(x, 0, 0.145), inner)
-		var handle := _box(Vector3(0.028, 0.055, 0.028), Vector3(0, 0.03, 0.02), black, pivot)
+		var handle_mat := StandardMaterial3D.new()
+		handle_mat.albedo_color = Color(0.78, 0.76, 0.7)  # worn cream bakelite toggle
+		handle_mat.roughness = 0.35
+		var base_mat := StandardMaterial3D.new()
+		base_mat.albedo_color = Color(0.22, 0.22, 0.21)
+		base_mat.roughness = 0.5
+		_box(Vector3(0.05, 0.11, 0.02), Vector3(x, 0, 0.152), base_mat)
+		var handle := _box(Vector3(0.026, 0.06, 0.026), Vector3(0, 0.032, 0.025), handle_mat, pivot)
 		handle.name = "Handle"
 		_levers.append(pivot)
 		_set_lever(i, false)

@@ -264,6 +264,31 @@ func _apply_dev_args() -> void:
 		e.global_position = player.global_position + fwd * minf(dist, best_len - 0.6)
 		e.rotation.y = best_yaw  # creature faces +Z -> toward the player
 		entities.append(e)
+	if _args.has("goto"):
+		await get_tree().physics_frame
+		var target := Vector3.ZERO
+		var normal := Vector3.ZERO
+		match _args.goto:
+			"breaker":
+				target = level.breaker_panel.global_position
+				normal = level.breaker_panel.global_basis.z
+			"keypad":
+				target = level.keypad.global_position
+				normal = level.keypad.global_basis.z
+			"blood", "oldblood":
+				for b in level.blood_spots:
+					if b.fresh == (_args.goto == "blood"):
+						target = b.pos
+						normal = -(b.dir as Vector3)
+						break
+			"note":
+				player.read_note("intro", Notes.intro())
+		if normal != Vector3.ZERO:
+			var d := float(_args.get("dist", "0.9"))
+			player.global_position = Vector3(target.x, 0.05, target.z) + normal * d
+			var to := target - (player.global_position + Vector3(0, Player.EYE_STAND, 0))
+			player.rotation.y = atan2(-to.x, -to.z)
+			player._pitch = atan2(to.y, Vector2(to.x, to.z).length())
 	if _args.has("autosolve"):
 		_autosolve()
 	if _args.has("shot"):

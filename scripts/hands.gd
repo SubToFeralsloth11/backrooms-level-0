@@ -257,11 +257,11 @@ func _build_flashlight() -> void:
 	flashlight = SpotLight3D.new()
 	flashlight.position = Vector3(0, 0, -0.125)
 	flashlight.light_color = Color(1.0, 0.93, 0.8)
-	flashlight.light_energy = 4.0
+	flashlight.light_energy = 2.4
 	flashlight.spot_range = 18.0
-	flashlight.spot_angle = 24.0
-	flashlight.spot_angle_attenuation = 0.85
-	flashlight.spot_attenuation = 1.2
+	flashlight.spot_angle = 30.0
+	flashlight.spot_angle_attenuation = 1.6  # soft spill falling off from the hotspot
+	flashlight.spot_attenuation = 1.6
 	flashlight.shadow_enabled = true
 	flashlight.shadow_bias = 0.03
 	flashlight.light_size = 0.02
@@ -286,8 +286,8 @@ func _build_paper() -> void:
 	paper_label = Label3D.new()
 	if ResourceLoader.exists("res://fonts/journal.ttf"):
 		paper_label.font = load("res://fonts/journal.ttf")
-	paper_label.font_size = 64
-	paper_label.pixel_size = 0.00028
+	paper_label.font_size = 52
+	paper_label.pixel_size = 0.00025
 	paper_label.width = 680
 	paper_label.autowrap_mode = TextServer.AUTOWRAP_WORD_SMART
 	paper_label.horizontal_alignment = HORIZONTAL_ALIGNMENT_LEFT
@@ -296,7 +296,7 @@ func _build_paper() -> void:
 	paper_label.modulate = Color(0.08, 0.08, 0.16)
 	paper_label.outline_size = 0
 	paper_label.shaded = false
-	paper_label.position = Vector3(0, 0.138, 0.0008)
+	paper_label.position = Vector3(-0.0875, 0.138, 0.0008)  # Label3D box grows right from its origin
 	paper.add_child(paper_label)
 
 
@@ -318,7 +318,7 @@ func reach() -> void:
 
 func set_flashlight_visual(on: bool, level: float) -> void:
 	flashlight.visible = on and level > 0.0
-	flashlight.light_energy = 4.0 * level
+	flashlight.light_energy = 2.4 * level
 	lens_mat.emission_energy_multiplier = 3.0 * level if on else 0.0
 
 

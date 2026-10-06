@@ -47,6 +47,7 @@ var _hum: AudioStreamPlayer
 var _tone: AudioStreamPlayer
 var _ambient_timer := 8.0
 
+var blood_spots: Array[Dictionary] = []  # {pos, dir, fresh} for each painted code
 var breaker_panel: Node3D
 var keypad: Node3D
 var exit_door: Node3D
@@ -1088,6 +1089,7 @@ func _wall_neighbours(c: Vector2i) -> int:
 func _blood_code(spot: Dictionary, symbol: int, digit: int, fresh: bool) -> void:
 	var h := rng.randf_range(1.15, 1.6)
 	var wp := wall_point(spot, h)
+	blood_spots.append({"pos": wp, "dir": spot.dir, "fresh": fresh})
 	var dir: Vector3 = spot.dir
 	var side := Vector3(-dir.z, 0, dir.x)
 	# fresh blood: wet, bright, dripping; old: dry brown-black and matte
