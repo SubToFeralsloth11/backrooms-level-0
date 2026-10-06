@@ -11,5 +11,10 @@
  "breaker_done": "The power's back... something changed.",
  "keypad_wrong": "No. That's not it.",
  "exit": "Please... please be the way out.",
- "whisper_quiet": "Quiet... stay quiet."
+ "whisper_quiet": "Quiet... stay quiet.",
+ "blood_wet": "It's still wet. Someone was just here.",
+ "death_hollow_heard": "It heard you run.",
+ "death_hollow": "It found you in the dark. It was listening.",
+ "death_smiler": "You looked away from the smile.",
+ "death_watcher": "It moved while you weren't watching."
 }

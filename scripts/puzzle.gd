@@ -10,6 +10,8 @@ const N := 6
 const ORD := ["first", "second", "third", "fourth", "fifth", "sixth"]
 const CLUE_NOTES := 4
 const SYMBOL_COUNT := 6
+## Journal names for textures/symbols/sym_N.png.
+const SYMBOL_NAMES := ["eye", "triangle", "spiral", "ladder", "crossed circle", "fork"]
 
 var rng := RandomNumberGenerator.new()
 var target_mask := 0
@@ -18,6 +20,7 @@ var note_clues: Array = []  # Array[Array[String]], one per clue note
 var code: Array[int] = []  # digit per symbol index, code[s] = digit painted beside symbol s
 var symbol_order: Array[int] = []  # order shown on keypad screen
 var decoys: Array[Dictionary] = []  # {symbol, digit}
+var ok := false  # breaker clue generation succeeded
 
 
 func _init(seed_value: int) -> void:
@@ -126,8 +129,9 @@ func _gen_breakers() -> void:
 			note_clues.append([])
 		for i in clues.size():
 			note_clues[i % CLUE_NOTES].append(clue_text(clues[i]))
+		ok = true
 		return
-	push_error("breaker puzzle generation failed")
+	push_warning("breaker puzzle generation failed; level will regenerate")
 
 
 func _gen_code() -> void:

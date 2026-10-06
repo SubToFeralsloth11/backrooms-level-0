@@ -23,6 +23,13 @@ var _fade := 0.0
 var _fade_target := 0.0
 var _fade_speed := 1.0
 var _player: Player
+## Esc/P toggles the pause menu (handled here: UI keeps processing while paused).
+var pause_enabled := true
+var _fear_val := 0.0
+var _blood_t := 0.0
+var _seen_blood := {}  # blood_spots index -> true
+var _codes: Array = []  # {symbol, digit, fresh} in the order seen
+var _fresh_seen := 0
 
 
 func _ready() -> void:
@@ -164,26 +171,42 @@ func _build_pause() -> Control:
 	v.add_child(_label("Paused", 48, Color(0.86, 0.78, 0.45)))
 	v.add_child(_spacer(20))
 	v.add_child(_plain_button("Resume", resume))
-	v.add_child(_button("Restart (same level)", retry_pressed))
+	v.add_child(_button("Restart (same level, new clues)", retry_pressed))
 	v.add_child(_button("Main menu", menu_pressed))
 	v.add_child(_spacer(20))
 	v.add_child(_label("Mouse sensitivity", 18, Color(0.7, 0.66, 0.55)))
-	var s := HSlider.new()
-	s.min_value = 0.0006
-	s.max_value = 0.006
-	s.step = 0.0001
-	s.value = Game.mouse_sensitivity
-	s.custom_minimum_size = Vector2(320, 24)
-	s.value_changed.connect(func(x): Game.mouse_sensitivity = x)
-	v.add_child(s)
+	v.add_child(_slider(0.0006, 0.006, 0.0001, Game.mouse_sensitivity, func(x): Game.mouse_sensitivity = x))
+	v.add_child(_label("Master volume", 18, Color(0.7, 0.66, 0.55)))
+	v.add_child(_slider(0.0, 1.0, 0.01, Game.master_volume, func(x):
+		Game.master_volume = x
+		Game.apply_volume()))
+	v.add_child(_label("Field of view", 18, Color(0.7, 0.66, 0.55)))
+	v.add_child(_slider(60.0, 100.0, 1.0, Game.fov, func(x):
+		Game.fov = x
+		Game.apply_fov()))
 	var cb := CheckBox.new()
 	cb.text = "Subtitles"
 	cb.button_pressed = Game.subtitles_enabled
 	if _font:
 		cb.add_theme_font_override("font", _font)
-	cb.toggled.connect(func(on): Game.subtitles_enabled = on)
+	cb.toggled.connect(func(on):
+		Game.subtitles_enabled = on
+		Game.save_settings())
 	v.add_child(cb)
 	return root
+
+
+## Settings slider; saved to user://settings.cfg when the drag ends.
+func _slider(lo: float, hi: float, step: float, value: float, apply: Callable) -> HSlider:
+	var s := HSlider.new()
+	s.min_value = lo
+	s.max_value = hi
+	s.step = step
+	s.value = value
+	s.custom_minimum_size = Vector2(320, 24)
+	s.value_changed.connect(apply)
+	s.drag_ended.connect(func(_changed): Game.save_settings())
+	return s
 
 
 func _plain_button(text: String, cb: Callable) -> Button:
@@ -241,12 +264,27 @@ func show_pause() -> void:
 
 func resume() -> void:
 	_screens.pause.visible = false
+	Game.save_settings()
 	Game.state = Game.State.PLAYING
 	get_tree().paused = false
 	Input.mouse_mode = Input.MOUSE_MODE_CAPTURED
 
 
-func show_death() -> void:
+func _unhandled_input(event: InputEvent) -> void:
+	if not pause_enabled or not event.is_action_pressed("pause"):
+		return
+	if Game.state == Game.State.PLAYING:
+		Game.state = Game.State.PAUSED
+		get_tree().paused = true
+		Input.mouse_mode = Input.MOUSE_MODE_VISIBLE
+		show_pause()
+		get_viewport().set_input_as_handled()
+	elif Game.state == Game.State.PAUSED:
+		resume()
+		get_viewport().set_input_as_handled()
+
+
+func show_death(cause := "") -> void:
 	_set_hud(false)
 	_post_mat.set_shader_parameter("fade_color", Vector3.ZERO)
 	_fade_target = 1.0
@@ -254,6 +292,7 @@ func show_death() -> void:
 	await get_tree().create_timer(2.6).timeout
 	Input.mouse_mode = Input.MOUSE_MODE_VISIBLE
 	var s: Control = _screens.death
+	s.find_child("Title", true, false).text = Game.death_line(cause)
 	s.find_child("Info", true, false).text = "Time survived  " + Game.elapsed_text()
 	s.visible = true
 
@@ -300,6 +339,10 @@ func _set_hud(on: bool) -> void:
 
 func bind_player(p: Player) -> void:
 	_player = p
+	_seen_blood.clear()
+	_codes.clear()
+	_fresh_seen = 0
+	_fear_val = 0.0
 	p.prompt_changed.connect(func(t): _prompt.text = ("[E]  " + t) if t != "" else "")
 	p.reading_changed.connect(func(on): _hint.text = "E  put away      Tab  next page" if on else "")
 
@@ -319,14 +362,89 @@ func _process(delta: float) -> void:
 	_post_mat.set_shader_parameter("fade", _fade)
 	_post_mat.set_shader_parameter("fear", _fear())
 	_subtitle_bg.position.x = (get_viewport().get_visible_rect().size.x - _subtitle_bg.size.x) * 0.5
+	if Game.is_playing() and _player != null and is_instance_valid(_player):
+		_blood_t -= delta
+		if _blood_t <= 0.0:
+			_blood_t = 0.25
+			_check_blood()
 
 
-## Nearby entities raise sensor noise/fringe a little: the camera "feels" them.
+## Entities the player can actually see (line of sight, not hidden) raise
+## sensor noise/fringe: the camera "feels" them. No radar through walls.
 func _fear() -> float:
 	if _player == null or not is_instance_valid(_player):
 		return 0.0
+	if not Game.is_playing():
+		return _fear_val
 	var f := 0.0
-	for e in get_tree().get_nodes_in_group("entity"):
-		var d: float = (e as Node3D).global_position.distance_to(_player.global_position)
+	var eye := _player.camera.global_position
+	var space := _player.get_world_3d().direct_space_state
+	var lv: Level = Game.level
+	for node in get_tree().get_nodes_in_group("entity"):
+		var e := node as Node3D
+		if not e.is_visible_in_tree() or e.get("_hidden") == true:
+			continue
+		var target := e.global_position + Vector3(0, 1.2, 0)
+		var d := eye.distance_to(target)
+		if d > 15.0:
+			continue
+		var q := PhysicsRayQueryParameters3D.create(eye, target, 1)
+		var ex: Array[RID] = [_player.get_rid()]
+		if e is CollisionObject3D:
+			ex.append((e as CollisionObject3D).get_rid())
+		q.exclude = ex
+		if not space.intersect_ray(q).is_empty():
+			continue
 		f = maxf(f, 1.0 - clampf((d - 3.0) / 12.0, 0.0, 1.0))
+		if d < 8.0 and lv and lv.is_dark(lv.world_to_cell(_player.global_position)) \
+				and e.get_script().resource_path.ends_with("smiler.gd"):
+			Game.smiler_near_dark()
+	_fear_val = f
 	return f
+
+
+## Logs every painted symbol/number the player has clearly looked at (close,
+## near the centre of view, lit, unobstructed) to a journal page.
+func _check_blood() -> void:
+	var lv: Level = Game.level
+	if lv == null:
+		return
+	var cam := _player.camera
+	var eye := cam.global_position
+	var fwd := -cam.global_basis.z
+	for i in lv.blood_spots.size():
+		if _seen_blood.has(i):
+			continue
+		var b: Dictionary = lv.blood_spots[i]
+		var p: Vector3 = b.pos
+		var to := p - eye
+		var d := to.length()
+		if d > 5.0 or d < 0.01:
+			continue
+		var facing := fwd.dot(to / d)
+		if facing < 0.85:
+			continue
+		var lit := not lv.is_dark(lv.world_to_cell(p - (b.dir as Vector3) * 0.3)) \
+				or (_player.flashlight_on and facing > 0.93)
+		if not lit:
+			continue
+		var q := PhysicsRayQueryParameters3D.create(eye, p - (b.dir as Vector3) * 0.05, 1)
+		q.exclude = [_player.get_rid()]
+		if not _player.get_world_3d().direct_space_state.intersect_ray(q).is_empty():
+			continue
+		_seen_blood[i] = true
+		_codes.append({"symbol": b.symbol, "digit": b.digit, "fresh": b.fresh})
+		_update_codes_page()
+		if b.fresh:
+			_fresh_seen += 1
+			Game.say("blood" if _fresh_seen == 1 else "blood_wet")
+
+
+func _update_codes_page() -> void:
+	var text := Notes.codes(_codes)
+	Audio.play_2d("paper_rustle", -16.0, 0.08)
+	for e in _player.journal:
+		if e.id == "codes":
+			e.text = text
+			return
+	_player.journal.append({"id": "codes", "text": text})

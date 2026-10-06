@@ -2,6 +2,7 @@ extends Node3D
 ## Six-digit keypad beside the exit door. Dead until power is restored; then its
 ## screen shows the six symbols in the order the code must be entered.
 ## Three wrong codes: alarm that every entity hears, 25 s lockout.
+## The red LED blinks once per try left, then pauses.
 
 const MAX_TRIES := 3
 const LOCKOUT := 25.0
@@ -16,6 +17,7 @@ var _screen_lbl: Label3D
 var _symbols: Array[Sprite3D] = []
 var _led: StandardMaterial3D
 var _screen_mat: StandardMaterial3D
+var _blink_t := 0.0
 
 
 func _ready() -> void:
@@ -113,6 +115,19 @@ func _refresh() -> void:
 	_screen_lbl.visible = on
 	_screen_lbl.text = ("*".repeat(entry.length()) + "_".repeat(6 - entry.length())) if not _locked else "LOCKED"
 	_led.emission_energy_multiplier = 2.0 if on else 0.0
+	set_process(on and not _done)
+
+
+## Blink pattern: (tries left) short pulses, then a 1.2 s gap. Solid while locked.
+func _process(delta: float) -> void:
+	if _locked:
+		_led.emission_energy_multiplier = 2.0
+		return
+	var left := MAX_TRIES - tries
+	var period := left * 0.4 + 1.2
+	_blink_t = fmod(_blink_t + delta, period)
+	var lit := _blink_t < left * 0.4 and fmod(_blink_t, 0.4) < 0.2
+	_led.emission_energy_multiplier = 2.5 if lit else 0.15
 
 
 func _press(_player: Node, key: String) -> void:
@@ -147,13 +162,13 @@ func _submit() -> void:
 	entry = ""
 	Audio.play_3d("keypad_error", global_position, 0.0, 25.0, 0.0)
 	Game.emit_noise(global_position, 10.0, "keypad")
-	Game.say("keypad_wrong")
+	Game.say("keypad_wrong", false)
 	if tries >= MAX_TRIES:
 		_locked = true
 		tries = 0
 		_refresh()
 		Audio.play_3d("alarm", global_position + Vector3(0, 1.0, 0), 8.0, 120.0, 0.0)
 		Game.emit_noise(global_position, 400.0, "alarm")
-		await get_tree().create_timer(LOCKOUT).timeout
+		await get_tree().create_timer(LOCKOUT, false).timeout
 		_locked = false
 	_refresh()

@@ -7,6 +7,8 @@ signal noise(pos: Vector3, radius: float, source: String)
 signal power_changed(on: bool)
 signal blackout_changed(active: bool)
 signal player_died(cause: String)
+## Wrong breaker pattern pulled (before the blackout starts).
+signal wrong_lever
 signal escaped
 signal note_read(id: String)
 
@@ -14,13 +16,19 @@ enum State { MENU, PLAYING, PAUSED, DEAD, ESCAPED }
 
 var state: State = State.MENU
 var seed_value: int = 0
+## Puzzle seed for this run; -1 = derive from seed_value. Retry keeps the layout
+## (seed_value) but rolls a new puzzle_seed: new clues, new code, new spawns.
+var puzzle_seed := -1
 var player: Node3D
 var level: Node3D
 var power_on := false
 var blackout := false
 var run_start_msec := 0
+const SETTINGS_PATH := "user://settings.cfg"
 var mouse_sensitivity := 0.0022
 var subtitles_enabled := true
+var master_volume := 1.0  # linear 0..1
+var fov := 78.0
 
 var _lines := {}
 var _said := {}
@@ -44,6 +52,7 @@ func _ready() -> void:
 	else:
 		push_error("data/lines.json failed to parse")
 	new_seed()
+	load_settings()
 	get_viewport().size_changed.connect(_initial_scale)
 	_initial_scale()
 
@@ -82,6 +91,49 @@ func _process(delta: float) -> void:
 	if not is_equal_approx(s, render_scale):
 		render_scale = s
 		_apply_scale()
+
+
+func load_settings() -> void:
+	var cfg := ConfigFile.new()
+	if cfg.load(SETTINGS_PATH) == OK:
+		mouse_sensitivity = cfg.get_value("input", "sensitivity", mouse_sensitivity)
+		subtitles_enabled = cfg.get_value("ui", "subtitles", subtitles_enabled)
+		master_volume = cfg.get_value("audio", "master_volume", master_volume)
+		fov = cfg.get_value("video", "fov", fov)
+	apply_volume()
+
+
+func save_settings() -> void:
+	var cfg := ConfigFile.new()
+	cfg.set_value("input", "sensitivity", mouse_sensitivity)
+	cfg.set_value("ui", "subtitles", subtitles_enabled)
+	cfg.set_value("audio", "master_volume", master_volume)
+	cfg.set_value("video", "fov", fov)
+	cfg.save(SETTINGS_PATH)
+
+
+func apply_volume() -> void:
+	AudioServer.set_bus_volume_db(0, linear_to_db(maxf(master_volume, 0.0001)))
+
+
+func apply_fov() -> void:
+	if player and is_instance_valid(player):
+		player.set_fov(fov)
+
+
+## Text of a line from data/lines.json (no subtitle).
+func line(id: String) -> String:
+	return _lines.get(id, "")
+
+
+## Called when a Smiler is close to the player in the dark.
+func smiler_near_dark() -> void:
+	say("whisper_quiet")
+
+
+func death_line(cause: String) -> String:
+	var t := line("death_" + cause)
+	return t if t != "" else "You were found."
 
 
 func new_seed() -> void:

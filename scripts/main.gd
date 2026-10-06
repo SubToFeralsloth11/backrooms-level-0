@@ -5,13 +5,19 @@ extends Node
 ## Dev user args (after `--`): --auto (skip menu), --seed=N,
 ## --look=x,z,yaw,pitch (place camera), --shot=path.png (screenshot after
 ## --wait=s seconds, then quit), --flash (flashlight on), --power, --blackout,
-## --entity=hollow|smiler|watcher (spawn 3 m ahead for inspection), --nomonsters.
+## --entity=hollow|smiler|watcher (spawn 3 m ahead for inspection), --nomonsters,
+## --nointro (skip the intro fall), --intro (play it even with --shot).
+##
+## Retry keeps the layout but reseeds the puzzle (new clues, new code, new
+## spawns). Every generated level is validated; a bad one regenerates at seed+1.
 
 var world: Node3D
 var level: Level
 var player: Player
 var ui: UI
 var entities: Array[Node3D] = []
+var _watcher: Node3D
+var _intro_played := false
 var _args := {}
 var _first_worst := 0.0
 var _second_worst := 0.0
@@ -26,11 +32,12 @@ func _ready() -> void:
 	ui = preload("res://scripts/ui.gd").new()
 	add_child(ui)
 	ui.start_pressed.connect(func(): _start(false))
-	ui.retry_pressed.connect(func(): _start(false))
+	ui.retry_pressed.connect(func(): _start(false, true))
 	ui.new_level_pressed.connect(func(): _start(true))
 	ui.quit_pressed.connect(func(): get_tree().quit())
 	ui.menu_pressed.connect(_to_menu)
-	Game.player_died.connect(func(_c): ui.show_death())
+	Game.player_died.connect(func(c): ui.show_death(c))
+	Game.wrong_lever.connect(_wake_watcher)
 	Game.escaped.connect(_on_escape)
 	if _args.has("auto"):
 		_start(false)
@@ -38,18 +45,19 @@ func _ready() -> void:
 		ui.show_menu()
 
 
-func _start(new_seed: bool) -> void:
+## retry: same layout, new puzzle seed and entity spawn spots.
+func _start(new_seed: bool, retry := false) -> void:
 	if new_seed:
 		Game.new_seed()
+	Game.puzzle_seed = randi() % 1000000 if retry else -1
 	_clear_world()
 	world = Node3D.new()
 	world.name = "World"
 	add_child(world)
 	_build_environment()
-	level = Level.new()
-	level.name = "Level"
-	world.add_child(level)
-	level.generate(Game.seed_value)
+	_generate_level()
+	if retry:
+		level.rng.seed = Game.puzzle_seed  # spawns differ from the last attempt
 	Game.level = level
 	# parse creature meshes now, not on the frame a monster first appears
 	for m in ["hollow", "hollow_lod", "watcher", "watcher_lod"]:
@@ -60,6 +68,7 @@ func _start(new_seed: bool) -> void:
 	player.global_position = level.cell_center(level.spawn_cell) + Vector3(0, 0.05, 0)
 	player.rotation.y = randf() * TAU
 	ui.bind_player(player)
+	Game.apply_fov()
 	Game.start_run()
 	if not _args.has("nomonsters"):
 		_spawn_entities()
@@ -67,6 +76,59 @@ func _start(new_seed: bool) -> void:
 	level.start_ambience()
 	ui.show_game()
 	_opening()
+
+
+## Generate, validate, and on failure regenerate at seed+1.
+func _generate_level() -> void:
+	for attempt in 25:
+		level = Level.new()
+		level.name = "Level"
+		world.add_child(level)
+		level.generate(Game.seed_value, Game.puzzle_seed)
+		var why := _validate_level()
+		if why == "":
+			return
+		push_warning("seed %d rejected (%s), regenerating" % [Game.seed_value, why])
+		world.remove_child(level)
+		level.free()
+		Game.seed_value += 1
+		if Game.puzzle_seed >= 0:
+			Game.puzzle_seed += 1
+	push_error("no valid level after 25 seeds")
+
+
+## "" when the run is solvable: puzzle generated, every clue page non-empty,
+## and every page, prop and painted code reachable from spawn.
+func _validate_level() -> String:
+	var p: Puzzle = level.puzzle
+	if not p.ok or p.clues.is_empty():
+		return "puzzle"
+	for lines in p.note_clues:
+		if (lines as Array).is_empty():
+			return "empty clue page"
+	if not level.generation_ok:
+		return "placement"
+	var spots: Array[Vector3] = []
+	for n in level.get_children():
+		if n.get("kind") == "note":
+			spots.append((n as Node3D).position)
+	if spots.size() < p.note_clues.size() + 1:
+		return "missing pages"
+	for node in [level.breaker_panel, level.keypad]:
+		if node == null:
+			return "missing prop"
+		spots.append((node as Node3D).position + (node as Node3D).basis.z * 0.3)
+	if level.blood_spots.size() < Puzzle.SYMBOL_COUNT:
+		return "missing codes"
+	for b in level.blood_spots:
+		spots.append((b.pos as Vector3) - (b.dir as Vector3) * 0.3)
+	for s in spots:
+		if not s.is_finite():
+			return "unplaced spot"
+		var c: Vector2i = level.world_to_cell(s)
+		if level.is_wall(c) or level.reach_dist[level.idx(c)] < 0:
+			return "unreachable %s" % c
+	return ""
 
 
 func _clear_world() -> void:
@@ -135,25 +197,45 @@ func _spawn_entities() -> void:
 
 func _on_power(_on: bool) -> void:
 	# Restoring power wakes the watcher somewhere in the lit halls.
-	if _args.has("nomonsters"):
+	_wake_watcher()
+
+
+## Spawns the Watcher once per run: on power-on, or early on a wrong lever.
+func _wake_watcher() -> void:
+	if _args.has("nomonsters") or world == null or not Game.is_playing():
+		return
+	if is_instance_valid(_watcher):
 		return
 	var Watcher := load("res://scripts/entities/watcher.gd")
-	var w: Node3D = Watcher.new()
-	world.add_child(w)
-	w.global_position = level.cell_center(level.random_open_cell(Level.Zone.MAIN, player.global_position, 25.0))
-	entities.append(w)
+	_watcher = Watcher.new()
+	world.add_child(_watcher)
+	_watcher.global_position = level.cell_center(level.random_open_cell(Level.Zone.MAIN, player.global_position, 25.0))
+	entities.append(_watcher)
 
 
 func _opening() -> void:
 	ui.hold_black()
 	await _warm_up_shaders()
 	_apply_dev_args()
-	if _args.has("shot") or _args.has("bench"):
+	var skip_intro := _intro_played or _args.has("nointro") or _args.has("autosolve") or _args.has("bench") \
+		or _args.has("look") or _args.has("goto") or _args.has("entity") or (_args.has("shot") and not _args.has("intro"))
+	if not skip_intro:
+		_intro_played = true
+		ui.pause_enabled = false
+		var intro: Node = load("res://scripts/intro.gd").new()
+		add_child(intro)
+		await intro.play(player, ui)
+		intro.queue_free()
+		ui.pause_enabled = true
+		if _args.has("shot") or not is_instance_valid(player):
+			return
+	elif _args.has("shot") or _args.has("bench"):
 		return
-	ui.fade_from_black(4.0)
-	await get_tree().create_timer(3.0).timeout
+	else:
+		ui.fade_from_black(4.0)
+		await get_tree().create_timer(3.0, false).timeout
 	Game.say("wake")
-	await get_tree().create_timer(7.0).timeout
+	await get_tree().create_timer(7.0, false).timeout
 	if Game.is_playing():
 		Game.say("hello")
 
@@ -204,27 +286,16 @@ func _to_menu() -> void:
 	ui.show_menu()
 
 
-func _unhandled_input(event: InputEvent) -> void:
-	if event.is_action_pressed("pause"):
-		if Game.state == Game.State.PLAYING:
-			Game.state = Game.State.PAUSED
-			get_tree().paused = true
-			Input.mouse_mode = Input.MOUSE_MODE_VISIBLE
-			ui.show_pause()
-		elif Game.state == Game.State.PAUSED:
-			ui.resume()
-
-
 func _apply_dev_args() -> void:
 	if _args.has("shot"):
 		# automated capture: don't steal the user's cursor, ignore real input
 		Input.mouse_mode = Input.MOUSE_MODE_VISIBLE
 		player.set_process_unhandled_input(false)
-		set_process_unhandled_input(false)
+		ui.pause_enabled = false
 	if _args.has("bench"):
 		Input.mouse_mode = Input.MOUSE_MODE_VISIBLE
 		player.set_process_unhandled_input(false)
-		set_process_unhandled_input(false)
+		ui.pause_enabled = false
 		_bench(float(_args.bench))
 	if _args.has("power"):
 		Game.set_power(true)

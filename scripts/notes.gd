@@ -34,7 +34,15 @@ static func breaker() -> String:
 	return "\n\n".join([
 		"I did it. The lights by the door came on. Then the new one came. It moves when you don't watch it. You can hear its bones.",
 		"The door asks in shapes, not numbers. The walls remember the numbers - each one painted beside its shape.",
-		"Some of them are OLD. Brown, dried, flaking. Someone before me. They lie. Only trust the red. The red is mine.",
+		"Some of them are OLD. Brown, dried, flaking. Someone before me. They lie. Only trust the red ones that are still wet and running. The red is mine.",
 		"Three wrong and it screams for them.",
 		"I'm going back for the last one. If I don't",
 	])
+
+
+## My own page: every painted symbol/number I have looked at. entries: {symbol, digit, fresh}
+static func codes(entries: Array) -> String:
+	var body := "Numbers on the walls. What I saw, where I saw it."
+	for e in entries:
+		body += "\n\n- %s : %d   (%s)" % [Puzzle.SYMBOL_NAMES[e.symbol], e.digit, "red, wet" if e.fresh else "brown, dry"]
+	return body

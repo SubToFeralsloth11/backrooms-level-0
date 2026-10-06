@@ -117,11 +117,11 @@ func open() -> void:
 	if _open:
 		return
 	_open = true
-	await get_tree().create_timer(0.8).timeout
+	await get_tree().create_timer(0.8, false).timeout
 	Audio.play_3d("door_heavy_open", global_position + Vector3(0, 1.2, 0), 2.0, 40.0, 0.0)
 	Game.emit_noise(global_position, 30.0, "door")
 	get_node("Bulb").visible = true
 	var tw := create_tween()
 	tw.tween_property(_leaf, "rotation:y", -1.75, 3.2).set_trans(Tween.TRANS_SINE).set_ease(Tween.EASE_IN_OUT)
-	await get_tree().create_timer(0.5).timeout
+	await get_tree().create_timer(0.5, false).timeout
 	_block.queue_free()
