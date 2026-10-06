@@ -1,0 +1,15 @@
+{
+ "wake": "Where... where am I?",
+ "hello": "Hello? Is anyone there?",
+ "blood": "Is that... blood?",
+ "first_note": "Someone else was down here.",
+ "heard_something": "What was that?",
+ "see_entity": "No. No, no, no...",
+ "dark": "I can't see anything...",
+ "battery_low": "Come on, come on...",
+ "exhausted": "I need to... catch my breath.",
+ "breaker_done": "The power's back... something changed.",
+ "keypad_wrong": "No. That's not it.",
+ "exit": "Please... please be the way out.",
+ "whisper_quiet": "Quiet... stay quiet."
+}

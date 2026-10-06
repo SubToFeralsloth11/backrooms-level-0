@@ -1,0 +1,5 @@
+.godot/
+*.tmp
+.DS_Store
+/android/
+export/
