@@ -27,6 +27,9 @@ var _twitch_t := 0.0
 var _head_target := Vector3.ZERO
 var _head := Vector3.ZERO
 var _t := 0.0
+## 0..1: quadrupeds tuck their front limbs under the body (keeps them out of
+## a close camera).
+var fold := 0.0
 
 
 func build(config: Dictionary) -> void:
@@ -216,8 +219,8 @@ func _animate_quad(w: float, breath: float) -> void:
 		var back: float = -s * side
 		var lift_f := maxf(0.0, c * side) * w
 		var lift_b := maxf(0.0, -c * side) * w
-		_rot("shoulder_" + nm, Vector3(0, -front * 0.45 * w * side, lift_f * 0.35 * side))
-		_rot("elbow_" + nm, Vector3(-lift_f * 0.4, 0, 0))
+		_rot("shoulder_" + nm, Vector3(fold * 0.5, -front * 0.45 * w * side * (1.0 - fold * 0.6), lift_f * 0.35 * side - fold * 0.25 * side))
+		_rot("elbow_" + nm, Vector3(-lift_f * 0.4 + fold * 0.35, 0, 0))
 		_rot("hip_" + nm, Vector3(0, -back * 0.4 * w * side, lift_b * 0.3 * side))
 		_rot("knee_" + nm, Vector3(lift_b * 0.4, 0, 0))
 		_rot("fingers_" + nm, Vector3(sin(_t * 5.0 + side) * 0.1, 0, 0))

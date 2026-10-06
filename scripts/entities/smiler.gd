@@ -19,7 +19,10 @@ var _static: AudioStreamPlayer3D
 var _whisper: AudioStreamPlayer3D
 var _giggle_t := 6.0
 var _fade := 1.0
-var _hidden := false
+var _hidden := false  ## recoiled / caught in light: fading out, harmless, waiting to relocate
+var _relocate_t := 0.0
+var _lure := Vector3.INF  ## lever / alarm it heard, drifted toward through the dark
+var _lure_t := 0.0
 
 
 func _ready() -> void:
@@ -33,6 +36,7 @@ func _ready() -> void:
 	add_child(_whisper)
 	_whisper.position.y = 1.7
 	_static.play(randf() * 2.0)
+	Game.noise.connect(_on_noise)
 
 
 func _build_visual() -> void:
@@ -129,7 +133,7 @@ func _build_visual() -> void:
 func _physics_process(delta: float) -> void:
 	if Game.level == null:
 		return
-	var here_dark := level().is_dark(level().world_to_cell(global_position))
+	var here_dark := level().is_dark(global_position)
 	# In light it simply isn't there.
 	var visible_target := 1.0 if here_dark and not _hidden else 0.0
 	_fade = move_toward(_fade, visible_target, delta * (0.6 if visible_target > _fade else 3.0))
@@ -139,51 +143,84 @@ func _physics_process(delta: float) -> void:
 	if not Game.is_playing():
 		return
 	if not here_dark:
-		_relocate()
+		_hidden = true
+	if _hidden:
+		# Fade out completely, then re-form somewhere you aren't looking.
+		velocity = Vector3.ZERO
+		_whisper.stop()
+		_relocate_t -= delta
+		if _fade <= 0.01 and _relocate_t <= 0.0:
+			_relocate_t = 0.5
+			_relocate()
 		return
 	var pl := player()
 	var face_pos := _grin.global_position
-	if flashlight_on_me(face_pos):
-		_exposure += delta
+	var beam := flashlight_on_me(face_pos)
+	if beam > 0.0:
+		# a dying, stuttering beam barely hurts it
+		_exposure += delta * beam * beam
 		velocity = Vector3.ZERO
 		_grin.position.x = randf_range(-0.004, 0.004)  # shudders under the light
 		if _exposure > RECOIL_TIME:
 			_exposure = 0.0
 			Audio.play_3d("smiler_giggle", face_pos, 0.0, 25.0, 0.1)
 			_hidden = true
-			get_tree().create_timer(1.0).timeout.connect(_relocate)
+			_relocate_t = 1.0
 		return
 	_exposure = maxf(0.0, _exposure - delta * 0.5)
+	_lure_t -= delta
 	var spd := 0.0
-	if pl and level().is_dark(level().world_to_cell(pl.global_position)) and dist_to_player() < 32.0:
+	if pl and level().is_dark(pl.global_position) and dist_to_player() < 32.0:
 		_repath_t -= delta
 		if _repath_t <= 0.0:
 			_repath_t = 0.5
 			set_goal(pl.global_position, true)
 			_trim_path_to_dark()
 		spd = follow(delta, STALK_LIT if pl.flashlight_on else STALK_DARK, 6.0)
+	elif _lure_t > 0.0:
+		# drawn to the clunk of the breakers or the alarm, as far as the dark goes
+		_repath_t -= delta
+		if _repath_t <= 0.0:
+			_repath_t = 1.0
+			set_goal(_lure, true)
+			_trim_path_to_dark()
+		follow(delta, STALK_DARK, 6.0)
+		if at_goal():
+			_lure_t = 0.0
 	else:
 		# wait in the dark, turned toward the player
 		follow(delta, 0.0)
 		if pl:
 			face(pl.global_position, delta, 2.0)
 	_giggle_t -= delta
-	if _giggle_t <= 0.0 and dist_to_player() < 14.0:
+	var d := dist_to_player()
+	if _giggle_t <= 0.0 and d < 14.0:
 		_giggle_t = randf_range(8.0, 18.0)
 		Audio.play_3d("smiler_giggle", face_pos, -6.0, 20.0, 0.1)
-	var d := dist_to_player()
-	_whisper.volume_db = lerpf(-30.0, -4.0, clampf(1.0 - d / 10.0, 0.0, 1.0))
+	Audio.set_base_db(_whisper, lerpf(-30.0, -4.0, clampf(1.0 - d / 10.0, 0.0, 1.0)))
 	if d < 10.0 and not _whisper.playing:
 		_whisper.play()
 	elif d >= 12.0 and _whisper.playing:
 		_whisper.stop()
-	if spd > 0.0:
+	if d < 6.0 and pl and level().is_dark(pl.global_position):
+		pl.add_fear(delta * 0.2)
+	if spd > 0.0 and _fade > 0.6:
 		try_kill()
+
+
+func _on_noise(pos: Vector3, radius: float, source: String) -> void:
+	if frozen or not Game.is_playing() or not (source in ["lever", "alarm"]):
+		return
+	if global_position.distance_to(pos) > radius:
+		return
+	_lure = pos
+	_lure_t = 15.0
+	_repath_t = 0.0
 
 
 func _trim_path_to_dark() -> void:
 	for i in path.size():
-		if not level().is_dark(level().world_to_cell(path[i])):
+		if not level().is_dark(path[i]):
 			path.resize(i)
 			return
 
@@ -194,22 +231,29 @@ func _apply_fade() -> void:
 	_eye_mat.emission_energy_multiplier = 1.4 * _fade
 	_shade_mat.albedo_color.a = 0.92 * _fade
 	visible = _fade > 0.01
-	_static.volume_db = -6.0 if _fade > 0.5 else -40.0
+	var db := -6.0 if _fade > 0.5 else -40.0
+	if not is_equal_approx(_static.get_meta("base_db", 0.0), db):
+		Audio.set_base_db(_static, db)
 
 
+## Re-materialise somewhere dark, at least 18 m away, out of the player's
+## view. Stays hidden (and retries) if no such spot exists right now.
 func _relocate() -> void:
-	# Re-materialise somewhere dark, out of the player's view.
 	var pl := player()
 	var avoid := pl.global_position if pl else Vector3.INF
 	for i in 60:
 		var c := level().random_open_cell(-1, avoid, 18.0)
-		if level().is_dark(c):
-			global_position = level().cell_center(c)
-			path = PackedVector3Array()
-			path_i = 0
-			break
-	_hidden = false
-	_fade = 0.0
+		if not level().is_dark(c):
+			continue
+		var p := level().cell_center(c)
+		if pl and (player_sees(p + Vector3(0, 1.7, 0), false) or player_sees(p + Vector3(0, 0.9, 0), false)):
+			continue
+		global_position = p
+		clear_path()
+		_exposure = 0.0
+		_hidden = false
+		_fade = 0.0
+		return
 
 
 func on_kill() -> void:
