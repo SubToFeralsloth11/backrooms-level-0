@@ -30,6 +30,7 @@ func _take(player: Node) -> void:
 			player.spare_batteries += 1
 		"bottle":
 			if player.bottles >= player.MAX_BOTTLES:
+				player.fumble("Can't carry another bottle.")
 				return
 			Audio.play_2d("item_pickup", -6.0, 0.08)
 			player.bottles += 1

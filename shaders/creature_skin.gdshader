@@ -1,5 +1,5 @@
 shader_type spatial;
-render_mode diffuse_burley, specular_schlick_ggx;
+render_mode diffuse_burley, specular_schlick_ggx, sss_mode_skin;
 // Dead-flesh skin for sculpted creatures. Texturing uses the rest-pose
 // position (UV.xy, UV2.x) so detail stays glued to the body while skinned.
 // UV2.y = material region: 0 skin, 1 gums/mouth, 2 wet empty socket,
@@ -62,9 +62,15 @@ void fragment() {
 	col = mix(col, bruise_color, bruise);
 	col = mix(col, rot_color, rotm);
 	col = mix(col, vein_color, v * 0.85);
-	float wet = clamp(wetness * (0.5 + fbm(p * 0.8 + 7.0) * 0.9) - rotm, 0.0, 1.0);
-	float rough = mix(0.75, 0.2, wet);
-	float spec = mix(0.35, 0.6, wet);
+	// Wet/specular variation: broad wet patches broken up by fine slick
+	// streaks, so the skin glints in places instead of reading as grey clay.
+	float wet_patch = fbm(p * 0.8 + 7.0);
+	float slick = smoothstep(0.35, 0.75, vnoise(p * 4.0 + 3.0));
+	float wet = clamp(wetness * (0.3 + wet_patch * 0.9 + slick * 0.5) - rotm, 0.0, 1.0);
+	float rough = mix(0.8, 0.25, wet);
+	float spec = mix(0.35, 0.7, wet);
+	// blood under thin skin: warm the albedo where it's wet and un-bruised
+	col = mix(col, col * vec3(1.12, 0.9, 0.86), wet * (1.0 - bruise) * 0.5);
 	float h = pores * 0.3 + v * 0.8 + wrinkle * 0.5;
 	float bump_k = bump;
 	float sss_k = sss;
@@ -96,6 +102,14 @@ void fragment() {
 	NORMAL = normalize(abs(det) * NORMAL - grad * bump_k * 0.012);
 	ROUGHNESS = rough;
 	SPECULAR = spec;
+	if (r == 0) {
+		CLEARCOAT = wet * 0.5;
+		CLEARCOAT_ROUGHNESS = 0.2;
+	}
 	SSS_STRENGTH = sss_k;
-	BACKLIGHT = col * 0.2 * sss_k;
+	SSS_TRANSMITTANCE_COLOR = vec4(0.85, 0.22, 0.14, 1.0);
+	SSS_TRANSMITTANCE_DEPTH = 0.08;
+	SSS_TRANSMITTANCE_BOOST = 0.15 * sss_k;
+	// reddish light bleeding through thin flesh when backlit
+	BACKLIGHT = vec3(0.6, 0.16, 0.1) * (0.25 + 0.5 * sss_k) * (0.4 + mott * 0.6);
 }

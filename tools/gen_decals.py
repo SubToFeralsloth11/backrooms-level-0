@@ -114,24 +114,41 @@ def handprint(size=512):
 
 
 def drips(size=1024):
+    # Own RNG so the drip art can change without reshuffling the symbols; burn
+    # the global draws the previous version used to keep later outputs stable.
+    RNG.uniform(size=146)
+    rng = np.random.default_rng(4711)
     im = Image.new("L", (size, size), 0)
     d = ImageDraw.Draw(im)
+    # Ragged run-start: a thin, broken wiped streak along the top, no blobs.
+    y_top = 0.06 * size
+    for _ in range(9):
+        x0 = rng.uniform(0.04, 0.8) * size
+        length = rng.uniform(0.12, 0.35) * size
+        pts = []
+        for t in np.linspace(0, 1, 40):
+            pts.append((x0 + length * t, y_top + rng.normal(0, 0.006) * size + math.sin(t * 7 + x0) * 3))
+        d.line(pts, fill=int(rng.uniform(120, 230)), width=int(rng.uniform(2, 6)))
     for _ in range(26):
-        x = RNG.uniform(0.08, 0.92) * size
-        y0 = RNG.uniform(0.0, 0.25) * size
-        y1 = y0 + RNG.uniform(0.15, 0.75) * size
-        w = RNG.uniform(3, 10)
+        x = rng.uniform(0.08, 0.92) * size
+        y0 = y_top + rng.uniform(-0.02, 0.05) * size
+        y1 = y0 + rng.uniform(0.15, 0.75) * size
+        w = rng.uniform(3, 9)
         pts = []
         for t in np.linspace(0, 1, 30):
             pts.append((x + math.sin(t * 9 + x) * 2.0, y0 + (y1 - y0) * t))
-        d.line(pts, fill=255, width=int(w * 0.8))
-        d.ellipse([x - w * 0.7, y1 - w * 0.7, x + w * 0.7, y1 + w * 1.1], fill=255)
-    for _ in range(14):
-        x = RNG.uniform(0.05, 0.95) * size
-        y = RNG.uniform(0, 0.2) * size
-        r = RNG.uniform(20, 70)
-        d.ellipse([x - r, y - r * 0.5, x + r, y + r * 0.5], fill=255)
+        # thin at the source, swelling slightly toward the bead
+        n = len(pts)
+        for k in range(n - 1):
+            d.line([pts[k], pts[k + 1]], fill=255, width=max(1, int(w * (0.35 + 0.55 * k / n))))
+        d.ellipse([x - w * 0.55, y1 - w * 0.6, x + w * 0.55, y1 + w * 0.8], fill=255)
     a = np.asarray(im.filter(ImageFilter.GaussianBlur(1.5)), np.float32) / 255
+    # break up the top streak so it reads as a wiped, ragged start
+    state = RNG.bit_generator.state  # keep global sequence identical to before
+    n = fbm(size, 4, 16)
+    RNG.bit_generator.state = state
+    yy = np.linspace(0, 1, size)[:, None]
+    a = a * np.where(yy < 0.1, np.clip(n * 1.8 - 0.3, 0, 1), 1.0)
     return np.clip(a * 1.3, 0, 1)
 
 

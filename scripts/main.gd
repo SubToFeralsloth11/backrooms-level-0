@@ -33,6 +33,7 @@ func _ready() -> void:
 	add_child(ui)
 	ui.start_pressed.connect(func(): _start(false))
 	ui.retry_pressed.connect(func(): _start(false, true))
+	print("ARGS:", _args)
 	ui.new_level_pressed.connect(func(): _start(true))
 	ui.quit_pressed.connect(func(): get_tree().quit())
 	ui.menu_pressed.connect(_to_menu)
@@ -53,6 +54,7 @@ func _start(new_seed: bool, retry := false) -> void:
 	_clear_world()
 	world = Node3D.new()
 	world.name = "World"
+	print("START", new_seed)
 	add_child(world)
 	_build_environment()
 	_generate_level()
@@ -87,6 +89,7 @@ func _generate_level() -> void:
 		level.generate(Game.seed_value, Game.puzzle_seed)
 		var why := _validate_level()
 		if why == "":
+			print("OPENING")
 			return
 		push_warning("seed %d rejected (%s), regenerating" % [Game.seed_value, why])
 		world.remove_child(level)
@@ -214,9 +217,11 @@ func _wake_watcher() -> void:
 
 
 func _opening() -> void:
+	print("OPENING_FN")
 	ui.hold_black()
 	await _warm_up_shaders()
-	_apply_dev_args()
+	await _apply_dev_args()
+	print("AFTER APPLY CALL (with await)")
 	var skip_intro := _intro_played or _args.has("nointro") or _args.has("autosolve") or _args.has("bench") \
 		or _args.has("look") or _args.has("goto") or _args.has("entity") or (_args.has("shot") and not _args.has("intro"))
 	if not skip_intro:
@@ -243,6 +248,7 @@ func _opening() -> void:
 ## Every material/pipeline gets drawn once behind a black screen so first
 ## sight of a monster or prop never stalls the frame.
 func _warm_up_shaders() -> void:
+	print("WARMUP START")
 	var holder := Node3D.new()
 	player.camera.add_child(holder)
 	holder.position = Vector3(0, -1.2, -2.6)
@@ -269,7 +275,7 @@ func _warm_up_shaders() -> void:
 	for i in 12:
 		player.rotation.y = yaw0 + TAU * i / 12.0
 		await get_tree().process_frame
-		await get_tree().process_frame
+		print("WARMUP FRAME", i)
 	player.rotation.y = yaw0
 	player.flashlight_on = false
 	holder.queue_free()
@@ -287,7 +293,9 @@ func _to_menu() -> void:
 
 
 func _apply_dev_args() -> void:
+	print("APPLY DEV ARGS START", _args)
 	if _args.has("shot"):
+		print("APPLY DEV ARGS", _args.has("bench"))
 		# automated capture: don't steal the user's cursor, ignore real input
 		Input.mouse_mode = Input.MOUSE_MODE_VISIBLE
 		player.set_process_unhandled_input(false)
@@ -295,8 +303,9 @@ func _apply_dev_args() -> void:
 	if _args.has("bench"):
 		Input.mouse_mode = Input.MOUSE_MODE_VISIBLE
 		player.set_process_unhandled_input(false)
+		print("IN BENCH BLOCK")
 		ui.pause_enabled = false
-		_bench(float(_args.bench))
+		await _bench(float(_args.bench))
 	if _args.has("power"):
 		Game.set_power(true)
 	if _args.has("blackout"):
@@ -373,10 +382,14 @@ func _apply_dev_args() -> void:
 
 ## Spin the view for `secs` after a warm-up and print frame-time stats.
 func _bench(secs: float) -> void:
+	print("BENCH FUNC START", secs)
 	ui.skip_fade()
 	await get_tree().create_timer(3.0).timeout  # shader compile / streaming warm-up
+	print("BENCH START", secs)
 	var times: Array[float] = []
+	print("BENCH BEFORE SKIP")
 	var t := 0.0
+	print("BENCH AFTER SKIP")
 	var draws := 0
 	var prims := 0
 	var cpu_proc := 0.0

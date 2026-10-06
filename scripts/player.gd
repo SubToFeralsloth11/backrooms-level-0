@@ -16,8 +16,14 @@ const EYE_CROUCH := 0.92
 const MAX_BOTTLES := 3
 const BATTERY_LIFE := 210.0  # seconds of light per battery pair
 const REACH := 1.9
+const LEAN_DIST := 0.34
+const LEAN_ROLL := 0.13
 ## Noise radii (m) of a footstep by gait.
 const STEP_NOISE := {"crouch": 1.2, "walk": 6.5, "run": 19.0}
+## Gait from actual horizontal speed (m/s): below WALK_MIN steps are crouch-quiet.
+const WALK_MIN := 1.2
+const RUN_MIN := 3.0
+const FEAR_RANGE := 14.0
 
 var spare_batteries := 0
 var bottles := 0
@@ -28,6 +34,12 @@ var exhausted := false
 var crouching := false
 var alive := true
 var journal: Array[Dictionary] = []
+## 0..1: entity proximity / being hunted. Drives hand tremor and the heartbeat.
+var fear := 0.0
+## True while a journal page is held up.
+var reading: bool:
+	get:
+		return _reading_idx >= 0
 
 var head: Node3D
 var camera: Camera3D
@@ -48,6 +60,11 @@ var _was_on_floor := true
 var _breath_noise_t := 0.0
 var _shake := 0.0
 var _dark_t := 0.0
+var _lean := 0.0
+var _base_fov := 78.0
+var _fear_boost := 0.0
+var _fear_t := 0.0
+var _fumble_t := 0.0
 
 
 func _ready() -> void:
@@ -66,7 +83,7 @@ func _ready() -> void:
 	head.position.y = EYE_STAND
 	add_child(head)
 	camera = Camera3D.new()
-	camera.fov = 78.0
+	camera.fov = _base_fov
 	camera.near = 0.015
 	camera.far = 80.0
 	head.add_child(camera)
@@ -78,7 +95,33 @@ func _ready() -> void:
 	_breath.volume_db = -60.0
 	add_child(_breath)
 	hands.set_flashlight_visual(false, 0.0)
+	for a in [["lean_left", KEY_Q], ["lean_right", KEY_Z]]:
+		if not InputMap.has_action(a[0]):
+			InputMap.add_action(a[0])
+			var ev := InputEventKey.new()
+			ev.physical_keycode = a[1]
+			InputMap.action_add_event(a[0], ev)
 	Game.player = self
+
+
+## Base field of view (settings). Kept separate so effects can add on top.
+func set_fov(v: float) -> void:
+	_base_fov = v
+	camera.fov = v
+
+
+## Entities call this while hunting/close; decays on its own.
+func add_fear(amount: float) -> void:
+	_fear_boost = clampf(maxf(_fear_boost, amount), 0.0, 1.0)
+
+
+## Failed action: pocket pat, a dull knock, and a short thought.
+func fumble(text: String) -> void:
+	hands.fumble()
+	Audio.play_2d("fumble", -12.0, 0.08)
+	if _fumble_t <= 0.0 and Game.subtitles_enabled:
+		Game.subtitle.emit(text, 1.8)
+	_fumble_t = 1.5
 
 
 func _unhandled_input(event: InputEvent) -> void:
@@ -171,26 +214,30 @@ func _physics_process(delta: float) -> void:
 			_breath_noise_t = 1.2
 			Game.emit_noise(global_position, 3.5, "breath")
 
-	# --- gait, head bob, footsteps ---
-	var speed01 := clampf(hv.length() / RUN, 0.0, 1.0)
+	# --- gait (from actual speed), head bob, footsteps ---
+	var spd := hv.length()
+	var gait := "run" if spd > RUN_MIN else ("walk" if spd > WALK_MIN else "crouch")
+	var speed01 := clampf(spd / RUN, 0.0, 1.0)
 	if moving and is_on_floor():
-		var freq := 1.9 if crouching else (2.6 if running else 1.85)
+		var freq := lerpf(1.7, 2.6, clampf((spd - CROUCH) / (RUN - CROUCH), 0.0, 1.0))
 		_step_phase += delta * freq * PI
 		var s := signf(sin(_step_phase))
 		if s != _last_step_sign:
 			_last_step_sign = s
-			_footstep("crouch" if crouching else ("run" if running else "walk"))
+			_footstep(gait)
 	else:
 		_step_phase = lerpf(_step_phase, roundf(_step_phase / PI) * PI, 1.0 - exp(-6.0 * delta))
-	var amp := 0.012 if crouching else (0.045 if running else 0.024)
+	var amp := {"crouch": 0.012, "walk": 0.024, "run": 0.045}[gait] as float
 	var bob_target := Vector3(cos(_step_phase) * amp * 0.6, -absf(sin(_step_phase)) * amp, 0) if moving else Vector3.ZERO
 	_bob = _bob.lerp(bob_target, 1.0 - exp(-12.0 * delta))
 	_land_dip = lerpf(_land_dip, 0.0, 1.0 - exp(-8.0 * delta))
-	_tilt = lerpf(_tilt, -input.x * 0.02 + (sin(_step_phase) * 0.006 if running else 0.0), 1.0 - exp(-6.0 * delta))
+	_tilt = lerpf(_tilt, -input.x * 0.02 + (sin(_step_phase) * 0.006 if gait == "run" else 0.0), 1.0 - exp(-6.0 * delta))
 	_shake = maxf(0.0, _shake - delta * 1.5)
 	var shake_v := Vector3(randf_range(-1, 1), randf_range(-1, 1), 0) * _shake * 0.02
 	camera.position = _bob + Vector3(0, -_land_dip, 0) + shake_v
-	head.rotation = Vector3(_pitch, 0, _tilt)
+	_update_lean(delta, playing and not running)
+	head.rotation = Vector3(_pitch, 0, _tilt - _lean * LEAN_ROLL)
+	_update_fear(delta)
 
 	# --- flashlight battery ---
 	if flashlight_on:
@@ -226,15 +273,66 @@ func _physics_process(delta: float) -> void:
 	if _reading_idx >= 0:
 		var lit := 0.9 if (flashlight_on or not Game.level.is_dark(Game.level.world_to_cell(global_position))) else 0.1
 		hands.set_paper_light(lit)
-	hands.animate(delta, _step_phase, speed01 if moving else 0.0, 1.0 if crouching else 0.0, _look_delta, wall_close)
+	hands.animate(delta, _step_phase, speed01 if moving else 0.0, 1.0 if crouching else 0.0, _look_delta, wall_close, fear)
 	_look_delta = Vector2.ZERO
+
+
+## Q/Z lean: the head slides sideways around a corner, stopping short of walls.
+func _update_lean(delta: float, allowed: bool) -> void:
+	var want := 0.0
+	if allowed:
+		want = Input.get_action_strength("lean_right") - Input.get_action_strength("lean_left")
+	if want != 0.0:
+		var side := global_basis.x * signf(want)
+		var from := global_position + Vector3(0, head.position.y, 0)
+		var q := PhysicsRayQueryParameters3D.create(from, from + side * (LEAN_DIST + 0.2), 1)
+		var hit := get_world_3d().direct_space_state.intersect_ray(q)
+		if not hit.is_empty():
+			var room := maxf(0.0, from.distance_to(hit.position) - 0.2)
+			want = signf(want) * minf(absf(want), room / LEAN_DIST)
+	_lean = lerpf(_lean, want, 1.0 - exp(-8.0 * delta))
+	head.position.x = _lean * LEAN_DIST
+
+
+## Fear from nearby entities (closer and in sight = stronger) plus entity hunts.
+func _update_fear(delta: float) -> void:
+	_fumble_t -= delta
+	_fear_boost = maxf(0.0, _fear_boost - delta * 0.12)
+	_fear_t -= delta
+	if _fear_t <= 0.0:
+		_fear_t = 0.25
+		var near := 0.0
+		var eye := camera.global_position
+		var space := get_world_3d().direct_space_state
+		for node in get_tree().get_nodes_in_group("entity"):
+			var e := node as Node3D
+			if e == null or not e.is_visible_in_tree():
+				continue
+			var d := eye.distance_to(e.global_position)
+			if d > FEAR_RANGE:
+				continue
+			var f := 1.0 - d / FEAR_RANGE
+			var q := PhysicsRayQueryParameters3D.create(eye, e.global_position + Vector3(0, 1.2, 0), 1)
+			if not space.intersect_ray(q).is_empty():
+				f *= 0.45  # felt, not seen
+			near = maxf(near, f)
+		set_meta("fear_near", near)
+	var target := maxf(_fear_boost, get_meta("fear_near", 0.0))
+	fear = lerpf(fear, target, 1.0 - exp(-(3.0 if target > fear else 0.6) * delta))
 
 
 func _footstep(gait: String) -> void:
 	var feet := global_position + Vector3(0, 0.05, 0)
 	var vol := {"crouch": -22.0, "walk": -11.0, "run": -4.0}[gait] as float
-	Audio.play_3d("footstep_carpet_run" if gait == "run" else "footstep_carpet", feet, vol, 25.0, 0.08)
-	Game.emit_noise(global_position, STEP_NOISE[gait], "step")
+	var radius: float = STEP_NOISE[gait]
+	if Audio.floor_at(feet) == "concrete":
+		var p := Audio.play_3d("footstep_concrete", feet, vol + (1.5 if gait == "run" else -1.0), 30.0, 0.1)
+		if p and gait == "run":
+			p.pitch_scale *= 1.08
+		radius *= 1.25  # hard floors carry
+	else:
+		Audio.play_3d("footstep_carpet_run" if gait == "run" else "footstep_carpet", feet, vol, 25.0, 0.08)
+	Game.emit_noise(global_position, radius, "step")
 
 
 func _update_target() -> void:
@@ -260,18 +358,29 @@ func _toggle_flashlight() -> void:
 
 
 func _swap_batteries() -> void:
-	if spare_batteries <= 0 or battery > 0.5:
+	if spare_batteries <= 0:
+		fumble("No spare batteries.")
+		return
+	if battery > 0.5:
+		fumble("These still have juice.")
 		return
 	spare_batteries -= 1
 	battery = 1.0
+	hands.swap_batteries()
 	Audio.play_2d("battery_insert", -6.0, 0.05)
 
 
 func _throw() -> void:
-	if bottles <= 0 or _reading_idx >= 0:
+	if _reading_idx >= 0:
+		return
+	if bottles <= 0:
+		fumble("Nothing left to throw.")
 		return
 	bottles -= 1
-	hands.reach()
+	hands.throw()
+	await get_tree().create_timer(Hands.THROW_RELEASE, false).timeout
+	if not alive:
+		return
 	Audio.play_2d("throw_whoosh", -8.0, 0.1)
 	var Bottle := preload("res://scripts/thrown_bottle.gd")
 	var b: RigidBody3D = Bottle.new()

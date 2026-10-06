@@ -42,22 +42,25 @@ var _panel_mm := {}  # group -> MultiMeshInstance3D
 var _lights: Array[OmniLight3D] = []
 var _light_timer := 0.0
 var _flicker_panels: Array[Dictionary] = []
+var _panel_grid := {}  # Vector2i panel slot cell -> panel dict
 var _mat := {}
 var _hum: AudioStreamPlayer
 var _tone: AudioStreamPlayer
 var _ambient_timer := 8.0
 
-var blood_spots: Array[Dictionary] = []  # {pos, dir, fresh} for each painted code
+var blood_spots: Array[Dictionary] = []  # {pos, dir, fresh, symbol, digit} for each painted code
+var drip_spots: Array = []  # world positions of decorative wall drips (codes keep clear)
+var generation_ok := true  # false when a required item (clue note, blood code) couldn't be placed
 var breaker_panel: Node3D
 var keypad: Node3D
 var exit_door: Node3D
 
 
-func generate(seed_value: int) -> void:
+func generate(seed_value: int, puzzle_seed := -1) -> void:
 	rng.seed = seed_value
 	noise.seed = seed_value
 	noise.frequency = 0.09
-	puzzle = Puzzle.new(seed_value)
+	puzzle = Puzzle.new(seed_value if puzzle_seed < 0 else puzzle_seed)
 	_build_grid()
 	_build_materials()
 	_build_geometry()
@@ -69,6 +72,7 @@ func generate(seed_value: int) -> void:
 	_build_audio()
 	Game.power_changed.connect(_on_power)
 	Game.blackout_changed.connect(_on_power)
+	preload("res://scripts/props.gd").decorate(self)
 
 
 # ---------------------------------------------------------------- grid
@@ -101,13 +105,21 @@ func world_to_cell(p: Vector3) -> Vector2i:
 	return Vector2i(clampi(int(floor(p.x / CELL)), 0, W - 1), clampi(int(floor(p.z / CELL)), 0, H - 1))
 
 
-## True when a cell has no working light: the maintenance wing, the exit hall
-## before power, or anywhere during a blackout.
-func is_dark(c: Vector2i) -> bool:
+## True when a cell (Vector2i) or world position (Vector3) has no working
+## light: the maintenance wing, the exit hall before power, anywhere during a
+## blackout, or under a dead / currently-dark flickering panel.
+func is_dark(at) -> bool:
 	if Game.blackout:
 		return true
+	var c: Vector2i = world_to_cell(at) if at is Vector3 else at
 	var z := zone_of(c)
-	return z == Zone.DARK or (z == Zone.EXIT and not Game.power_on)
+	if z == Zone.DARK or (z == Zone.EXIT and not Game.power_on):
+		return true
+	var slot := Vector2i(roundi((c.x - 2) / float(PANEL_STEP)) * PANEL_STEP + 2, roundi((c.y - 2) / float(PANEL_STEP)) * PANEL_STEP + 2)
+	var pd: Dictionary = _panel_grid.get(slot, {})
+	if pd.is_empty():
+		return false
+	return pd.kind == "dead" or (pd.kind == "flicker" and float(pd.level) < 0.4)
 
 
 func _set_wall(c: Vector2i, v: int) -> void:
@@ -414,6 +426,10 @@ func _build_materials() -> void:
 	_mat.ceiling = _pbr("ceiling", Color(0.82, 0.80, 0.70), 3.6, 0.9)
 	_mat.ceiling.metallic_specular = 0.08  # acoustic tile: no glints along the T-bar grooves
 	_mat.carpet.metallic_specular = 0.2
+	# finer, flatter pile: the raw texture reads as coarse straw up close
+	_mat.carpet.uv1_scale = Vector3.ONE / 0.7
+	_mat.carpet.normal_scale = 0.35
+	_mat.carpet.albedo_color = Color(0.93, 0.92, 0.9)
 	_mat.concrete = _pbr("concrete", Color(0.45, 0.44, 0.42), 3.0, 0.9)
 	_mat.metal = _pbr("metal", Color(0.35, 0.38, 0.36), 1.0, 0.55)
 	var mtl := _tex("metal_metallic")
@@ -534,6 +550,15 @@ func _build_geometry() -> void:
 	var size_z := H * CELL
 	_slab("Floor", _mat.carpet, Vector3(size_x * 0.5, -0.05, size_z * 0.5), Vector3(size_x + 6, 0.1, size_z + 6), body)
 	_slab("Ceiling", _mat.ceiling, Vector3(size_x * 0.5, WALL_H + 0.05, size_z * 0.5), Vector3(size_x + 6, 0.1, size_z + 6), body)
+	# breaker room: bare concrete floor laid over the carpet (visual only)
+	var bm := PlaneMesh.new()
+	bm.size = Vector2(BREAKER.size.x, BREAKER.size.y) * CELL
+	bm.material = _mat.concrete
+	var bf := MeshInstance3D.new()
+	bf.name = "BreakerFloor"
+	bf.mesh = bm
+	bf.position = Vector3((BREAKER.position.x + BREAKER.size.x * 0.5) * CELL, 0.002, (BREAKER.position.y + BREAKER.size.y * 0.5) * CELL)
+	add_child(bf)
 
 
 func _slab(slab_name: String, mat: Material, center: Vector3, size: Vector3, body: StaticBody3D) -> void:
@@ -573,6 +598,7 @@ func _build_panels() -> void:
 				kind = "flicker"
 			var pd := {"pos": p, "cell": c, "zone": z, "kind": kind, "level": 1.0, "timer": rng.randf_range(0.5, 6.0), "burst": 0.0}
 			panels.append(pd)
+			_panel_grid[c] = pd
 			if kind == "flicker":
 				var mi := MeshInstance3D.new()
 				mi.mesh = _panel_mesh()
@@ -853,7 +879,10 @@ func _place_dressing() -> void:
 			continue
 		var tex := "blood_hand" if i % 3 != 0 else "blood_drips"
 		var sz := Vector3(0.32, 0.3, 0.34) if tex == "blood_hand" else Vector3(1.1, 0.3, 1.3)
-		_decal(tex, wall_point(spot, rng.randf_range(0.9, 1.5)), sz, wall_basis(spot.dir, rng.randf_range(-0.4, 0.4)))
+		var wp := wall_point(spot, rng.randf_range(0.9, 1.5))
+		_decal(tex, wp, sz, wall_basis(spot.dir, rng.randf_range(-0.4, 0.4)))
+		if tex == "blood_drips":
+			drip_spots.append(wp)
 		used.append(cell_center(spot.cell))
 
 	# Signage.
@@ -967,6 +996,9 @@ func _place_puzzle() -> void:
 	for i in puzzle.note_clues.size():
 		var z := Zone.DARK if i == 3 else Zone.MAIN
 		var p := _far_spot(z, used, 22.0)
+		if p == Vector3.INF:
+			generation_ok = false
+			continue
 		_spawn_note(p, "clue_%d" % i, Notes.clue(i, puzzle.note_clues[i]))
 		used.append(p)
 
@@ -1009,9 +1041,13 @@ func _place_puzzle() -> void:
 	writings.shuffle()
 	for w in writings:
 		var zf := Zone.MAIN
-		var spot := wall_spot(zf, used, 14.0)
+		# keep clear of decorative drips so they never sit beside a lying code
+		var spot := wall_spot(zf, used + drip_spots, 14.0)
 		if spot.is_empty():
-			spot = wall_spot(zf, used, 6.0)
+			spot = wall_spot(zf, used + drip_spots, 6.0)
+		if spot.is_empty():
+			generation_ok = false
+			continue
 		_blood_code(spot, w.symbol, w.digit, w.fresh)
 		used.append(cell_center(spot.cell))
 
@@ -1059,7 +1095,7 @@ func _note_spot(from: Vector3, dmin: float, dmax: float, used: Array) -> Vector3
 
 
 func _far_spot(z: int, used: Array, min_sep: float) -> Vector3:
-	var best := Vector3.ZERO
+	var best := Vector3.INF
 	var best_score := -1.0
 	for i in 900:
 		var c := random_open_cell(z)
@@ -1075,6 +1111,15 @@ func _far_spot(z: int, used: Array, min_sep: float) -> Vector3:
 		if score > best_score:
 			best_score = score
 			best = p
+	if best == Vector3.INF:
+		# fallback: any reachable open cell in the zone
+		for i in 4000:
+			var c := Vector2i(rng.randi_range(1, W - 2), rng.randi_range(1, H - 2))
+			if zone_of(c) != z or (z == Zone.DARK and BREAKER.has_point(c)):
+				continue
+			var ok := reach_dist[idx(c)] >= 0 if reach_dist.size() == W * H else is_open(c)
+			if ok and is_open(c):
+				return cell_center(c)
 	return best
 
 
@@ -1089,22 +1134,36 @@ func _wall_neighbours(c: Vector2i) -> int:
 func _blood_code(spot: Dictionary, symbol: int, digit: int, fresh: bool) -> void:
 	var h := rng.randf_range(1.15, 1.6)
 	var wp := wall_point(spot, h)
-	blood_spots.append({"pos": wp, "dir": spot.dir, "fresh": fresh})
+	blood_spots.append({"pos": wp, "dir": spot.dir, "fresh": fresh, "symbol": symbol, "digit": digit})
 	var dir: Vector3 = spot.dir
 	var side := Vector3(-dir.z, 0, dir.x)
 	# fresh blood: wet, bright, dripping; old: dry brown-black and matte
-	var col := Color(0.42, 0.02, 0.015) if fresh else Color(0.2, 0.11, 0.06)
+	var col := Color(0.55, 0.025, 0.02) if fresh else Color(0.2, 0.11, 0.06)
 	var sym := Decal.new()
 	sym.texture_albedo = load("res://textures/symbols/sym_%d.png" % symbol)
 	sym.modulate = col
 	sym.size = Vector3(0.36, 0.3, 0.36)
 	sym.basis = wall_basis(dir, rng.randf_range(-0.12, 0.12))
 	sym.cull_mask = 1
+	# wet fresh blood glints under the flashlight; old blood is dry and matte
+	sym.texture_orm = _orm_tex(0.12 if fresh else 0.97)
+	sym.normal_fade = 0.4
 	add_child(sym)
 	sym.position = wp - side * 0.22
 	var lbl := _scrawl(spot, h - 0.07, str(digit), col, 0.34)
 	lbl.position = wp + side * 0.2 - dir * 0.006 + Vector3(0, -0.05, 0)
 	if fresh:
-		_decal("blood_drips", wp + Vector3(0, -0.28, 0), Vector3(0.75, 0.3, 0.55), wall_basis(dir), Color(1, 1, 1, 0.85))
+		var dr := _decal("blood_drips", wp + Vector3(0, -0.28, 0), Vector3(0.75, 0.3, 0.55), wall_basis(dir), Color(1, 1, 1, 0.85))
+		dr.texture_orm = _orm_tex(0.15)
 	else:
 		_decal("stain_damp_1", wp, Vector3(1.0, 0.3, 0.9), wall_basis(dir, rng.randf() * TAU), Color(0.7, 0.6, 0.5, 0.5))
+
+
+## Flat ORM texture (AO=1, roughness, metallic=0) for decals, cached per roughness.
+func _orm_tex(roughness: float) -> Texture2D:
+	var key := "orm_%.2f" % roughness
+	if not _mat.has(key):
+		var img := Image.create(4, 4, false, Image.FORMAT_RGB8)
+		img.fill(Color(1.0, roughness, 0.0))
+		_mat[key] = ImageTexture.create_from_image(img)
+	return _mat[key]

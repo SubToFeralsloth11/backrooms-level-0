@@ -62,3 +62,6 @@ Processing notes: unless stated otherwise, files were trimmed, given short fades
 | watcher_scrape.wav | creatures-scuttle-01.wav | MinigunFiend | https://freesound.org/people/MinigunFiend/sounds/175228/ | CC0 1.0 | trimmed |
 | death_impact.wav | Gore Impact - "LOT OF HEART" | magnuswaker | https://freesound.org/people/magnuswaker/sounds/641046/ | CC0 1.0 | normalized |
 | ui_click.wav | Button Tick | NenadSimic | https://freesound.org/people/NenadSimic/sounds/268108/ | CC0 1.0 | trimmed |
+|footstep_concrete_1..4.wav|derived from footstep_carpet_1..4 (MindlessTrails, CC0)|—|tools/gen_sfx.py|CC0 1.0|260 Hz high-pass, synthesized heel click + grit, short hard-room slap|
+|heartbeat.wav|synthesized|project|tools/gen_sfx.py|CC0 1.0|72 bpm lub-dub, loopable|
+|fumble.wav|synthesized|project|tools/gen_sfx.py|CC0 1.0|cloth pats + small plastic knock|
