@@ -52,8 +52,8 @@ func _build_visual() -> void:
 		add_child(mi)
 	var fog := FogVolume.new()
 	fog.shape = RenderingServer.FOG_VOLUME_SHAPE_ELLIPSOID
-	fog.size = Vector3(1.2, 2.4, 1.0)
-	fog.position.y = 1.2
+	fog.size = Vector3(0.9, 2.2, 0.5)
+	fog.position = Vector3(0, 1.1, -0.12)  # behind the face so the grin isn't swallowed
 	var fm := FogMaterial.new()
 	fm.density = 1.6
 	fm.albedo = Color(0, 0, 0)
@@ -63,7 +63,8 @@ func _build_visual() -> void:
 	add_child(fog)
 
 	_grin = Node3D.new()
-	_grin.position = Vector3(0, 1.8, 0.16)
+	_grin.position = Vector3(0, 1.8, 0.27)
+	_grin.scale = Vector3.ONE * 1.45
 	add_child(_grin)
 	_grin_mat = StandardMaterial3D.new()
 	_grin_mat.albedo_color = Color(0.92, 0.9, 0.78)

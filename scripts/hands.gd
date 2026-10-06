@@ -5,7 +5,7 @@ extends Node3D
 ## left hand hangs low, reaches for interactions, and holds journal pages.
 ## Motion: inertial sway, walk/run pumping synced to the step phase, breathing.
 
-const SKIN := Color(0.74, 0.56, 0.46)
+const SKIN := Color(0.66, 0.49, 0.4)
 
 var flashlight: SpotLight3D
 var lens_mat: StandardMaterial3D
@@ -18,8 +18,8 @@ var _right: Node3D
 var _left: Node3D
 var _r_fingers: Array = []
 var _l_fingers: Array = []
-var _r_rest := Vector3(0.19, -0.2, -0.36)
-var _l_rest := Vector3(-0.26, -0.34, -0.3)
+var _r_rest := Vector3(0.2, -0.24, -0.4)
+var _l_rest := Vector3(-0.3, -0.52, -0.28)
 var _l_target := Vector3.ZERO
 var _l_target_rot := Vector3.ZERO
 var _reach := 0.0
@@ -108,25 +108,25 @@ func _build_arm(side: float, fingers: Array) -> Node3D:
 	add_child(arm)
 	# Forearm: tapered, slightly flattened.
 	var fa := CylinderMesh.new()
-	fa.top_radius = 0.028
-	fa.bottom_radius = 0.04
+	fa.top_radius = 0.025
+	fa.bottom_radius = 0.032
 	fa.height = 0.3
 	fa.radial_segments = 16
 	var forearm := _mi(fa, _skin, arm, Vector3(0, 0, 0.15), Vector3(PI / 2, 0, 0))
 	forearm.scale = Vector3(1.15, 1.0, 0.85)
 	# Sleeve + cuff.
 	var sl := CylinderMesh.new()
-	sl.top_radius = 0.047
-	sl.bottom_radius = 0.06
-	sl.height = 0.32
+	sl.top_radius = 0.042
+	sl.bottom_radius = 0.058
+	sl.height = 0.42
 	sl.radial_segments = 18
-	_mi(sl, _sleeve, arm, Vector3(0, 0.002, 0.3), Vector3(PI / 2, 0, 0))
+	_mi(sl, _sleeve, arm, Vector3(0, 0.002, 0.28), Vector3(PI / 2, 0, 0))
 	var cuff := TorusMesh.new()
-	cuff.inner_radius = 0.04
-	cuff.outer_radius = 0.052
+	cuff.inner_radius = 0.036
+	cuff.outer_radius = 0.047
 	cuff.rings = 16
 	cuff.ring_segments = 8
-	_mi(cuff, _sleeve, arm, Vector3(0, 0.002, 0.145), Vector3(PI / 2, 0, 0))
+	_mi(cuff, _sleeve, arm, Vector3(0, 0.002, 0.07), Vector3(PI / 2, 0, 0))
 	# Wrist + palm (flattened ellipsoids give soft, fleshy volume).
 	var wrist := SphereMesh.new()
 	wrist.radius = 0.03

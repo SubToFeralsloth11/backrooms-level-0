@@ -236,6 +236,8 @@ func _apply_dev_args() -> void:
 		player.rotation.y = deg_to_rad(float(v[2]))
 		if v.size() > 3:
 			player._pitch = deg_to_rad(float(v[3]))
+	if _args.has("flash"):
+		player.flashlight_on = true
 	if _args.has("entity"):
 		await get_tree().physics_frame
 		await get_tree().physics_frame
@@ -262,6 +264,8 @@ func _apply_dev_args() -> void:
 		e.global_position = player.global_position + fwd * minf(dist, best_len - 0.6)
 		e.rotation.y = best_yaw  # creature faces +Z -> toward the player
 		entities.append(e)
+	if _args.has("autosolve"):
+		_autosolve()
 	if _args.has("shot"):
 		ui.skip_fade()
 		await get_tree().create_timer(float(_args.get("wait", "4"))).timeout
@@ -303,4 +307,40 @@ func _bench(secs: float) -> void:
 	var worst := times[int(times.size() * 0.99)]
 	print("BENCH_HALVES first_worst_fps=%.1f second_worst_fps=%.1f" % [1.0 / _first_worst, 1.0 / _second_worst])
 	print("BENCH scale=%.2f " % Game.render_scale, "avg_fps=%.1f low1_fps=%.1f worst_fps=%.1f frames=%d max_draws=%d max_prims=%d max_cpu_proc_ms=%.1f max_cpu_phys_ms=%.1f" % [1.0 / avg, 1.0 / worst, 1.0 / times[-1], times.size(), draws, prims, cpu_proc, cpu_phys])
+	get_tree().quit()
+
+
+## Dev smoke test: solve the run through the real interaction handlers.
+func _autosolve() -> void:
+	var notes := 0
+	for n in level.get_children():
+		if n.get("kind") == "note":
+			notes += 1
+	print("AUTOSOLVE notes=%d clues=%d code=%s" % [notes, level.puzzle.clues.size(), level.puzzle.code_string()])
+	var bp: Node = level.breaker_panel
+	for i in Puzzle.N:
+		if bp.switches[i] != level.puzzle.bit(level.puzzle.target_mask, i):
+			bp._flip(player, i)
+	bp._pull_main(player)
+	await get_tree().create_timer(1.5).timeout
+	print("AUTOSOLVE power_on=%s" % Game.power_on)
+	var kp: Node = level.keypad
+	for d in "000000":
+		kp._press(player, d)
+	kp._press(player, "OK")
+	print("AUTOSOLVE wrong_code_tries=%d" % kp.tries)
+	for d in level.puzzle.code_string():
+		kp._press(player, d)
+	kp._press(player, "OK")
+	await get_tree().create_timer(5.0).timeout
+	# walk out through the opened door into the stairwell trigger
+	player.global_position = level.exit_door.global_position + Vector3(0, 0.1, -0.8)
+	player.rotation.y = PI  # face +Z (out through the door)
+	var t := 0.0
+	while Game.state == Game.State.PLAYING and t < 6.0:
+		Input.action_press("move_forward")
+		await get_tree().physics_frame
+		t += get_physics_process_delta_time()
+	Input.action_release("move_forward")
+	print("AUTOSOLVE escaped=%s state=%d" % [Game.state == Game.State.ESCAPED, Game.state])
 	get_tree().quit()

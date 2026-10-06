@@ -411,6 +411,8 @@ func _build_materials() -> void:
 	_mat.wall = _pbr("wallpaper", Color(0.78, 0.71, 0.42), 1.0, 0.8)
 	_mat.carpet = _pbr("carpet", Color(0.62, 0.52, 0.30), 1.0, 0.95)
 	_mat.ceiling = _pbr("ceiling", Color(0.82, 0.80, 0.70), 3.6, 0.9)
+	_mat.ceiling.metallic_specular = 0.08  # acoustic tile: no glints along the T-bar grooves
+	_mat.carpet.metallic_specular = 0.2
 	_mat.concrete = _pbr("concrete", Color(0.45, 0.44, 0.42), 3.0, 0.9)
 	_mat.metal = _pbr("metal", Color(0.35, 0.38, 0.36), 1.0, 0.55)
 	var mtl := _tex("metal_metallic")
@@ -437,9 +439,10 @@ func _build_materials() -> void:
 	off.metallic_specular = 0.7
 	_mat.panel_off = off
 	var frame := StandardMaterial3D.new()
-	frame.albedo_color = Color(0.7, 0.69, 0.64)
-	frame.roughness = 0.5
-	frame.metallic = 0.4
+	frame.albedo_color = Color(0.42, 0.41, 0.38)
+	frame.roughness = 0.85
+	frame.metallic = 0.0
+	frame.metallic_specular = 0.15
 	_mat.panel_frame = frame
 
 
@@ -574,7 +577,7 @@ func _build_panels() -> void:
 				mi.mesh = _panel_mesh()
 				mi.position = p
 				var mat: StandardMaterial3D = _mat.panel_on.duplicate()
-				mi.material_override = mat
+				mi.set_surface_override_material(0, mat)
 				pd["node"] = mi
 				pd["mat"] = mat
 				add_child(mi)
@@ -600,25 +603,28 @@ func _build_panels() -> void:
 	_refresh_panel_materials()
 
 
-func _panel_mesh() -> Mesh:
-	if _mat.has("panel_mesh"):
-		return _mat.panel_mesh
+## Panel mesh with the diffuser lit or unlit; the frame keeps its matte material.
+func _panel_mesh(lit := true) -> Mesh:
+	var key := "panel_mesh_on" if lit else "panel_mesh_off"
+	if _mat.has(key):
+		return _mat[key]
 	var st := SurfaceTool.new()
 	st.begin(Mesh.PRIMITIVE_TRIANGLES)
 	var hx := 0.3
 	var hz := 0.6
 	# diffuser (facing down)
-	_quad(st, Vector3(-hx, -0.015, hz), Vector3(hx, -0.015, hz), Vector3(hx, -0.015, -hz), Vector3(-hx, -0.015, -hz), Vector3.DOWN)
+	_quad(st, Vector3(-hx, -0.015, -hz), Vector3(hx, -0.015, -hz), Vector3(hx, -0.015, hz), Vector3(-hx, -0.015, hz), Vector3.DOWN)
 	var diffuser := st.commit()
 	var fr := SurfaceTool.new()
 	fr.begin(Mesh.PRIMITIVE_TRIANGLES)
 	_box_sides(fr, -hx - 0.03, -hz - 0.03, hx + 0.03, hz + 0.03, -0.02, 0.0)
 	# frame lip below the diffuser
-	_quad(fr, Vector3(-hx - 0.03, -0.02, hz + 0.03), Vector3(hx + 0.03, -0.02, hz + 0.03), Vector3(hx + 0.03, -0.02, hz), Vector3(-hx - 0.03, -0.02, hz), Vector3.DOWN)
-	_quad(fr, Vector3(-hx - 0.03, -0.02, -hz), Vector3(hx + 0.03, -0.02, -hz), Vector3(hx + 0.03, -0.02, -hz - 0.03), Vector3(-hx - 0.03, -0.02, -hz - 0.03), Vector3.DOWN)
+	_quad(fr, Vector3(-hx - 0.03, -0.02, hz), Vector3(hx + 0.03, -0.02, hz), Vector3(hx + 0.03, -0.02, hz + 0.03), Vector3(-hx - 0.03, -0.02, hz + 0.03), Vector3.DOWN)
+	_quad(fr, Vector3(-hx - 0.03, -0.02, -hz - 0.03), Vector3(hx + 0.03, -0.02, -hz - 0.03), Vector3(hx + 0.03, -0.02, -hz), Vector3(-hx - 0.03, -0.02, -hz), Vector3.DOWN)
 	fr.commit(diffuser)
+	diffuser.surface_set_material(0, _mat.panel_on if lit else _mat.panel_off)
 	diffuser.surface_set_material(1, _mat.panel_frame)
-	_mat.panel_mesh = diffuser
+	_mat[key] = diffuser
 	return diffuser
 
 
@@ -633,10 +639,9 @@ func _panel_lit(pd: Dictionary) -> bool:
 func _refresh_panel_materials() -> void:
 	var main_on := not Game.blackout
 	var exit_on := main_on and Game.power_on
-	_panel_mm.main.material_override = _mat.panel_on if main_on else _mat.panel_off
-	_panel_mm.exit.material_override = _mat.panel_on if exit_on else _mat.panel_off
-	_panel_mm.off.material_override = _mat.panel_off
-	# frames keep their own material only on surface 1 when lit/unlit; override covers both
+	_panel_mm.main.multimesh.mesh = _panel_mesh(main_on)
+	_panel_mm.exit.multimesh.mesh = _panel_mesh(exit_on)
+	_panel_mm.off.multimesh.mesh = _panel_mesh(false)
 	for pd in _flicker_panels:
 		if not _panel_lit(pd):
 			(pd.mat as StandardMaterial3D).emission_energy_multiplier = 0.0
@@ -713,7 +718,7 @@ func _assign_lights() -> void:
 		var l := _lights[i]
 		if i < near.size():
 			var pd: Dictionary = near[i][1]
-			l.position = pd.pos + Vector3(0, -0.12, 0)
+			l.position = pd.pos + Vector3(0, -0.35, 0)
 			l.set_meta("panel", pd)
 			l.set_meta("dist", near[i][0])
 			l.visible = true
